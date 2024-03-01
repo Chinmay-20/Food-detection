@@ -1,0 +1,249 @@
+# import the necessary packages
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+import os
+import matplotlib.pyplot as plt
+import PIL
+import seaborn as sns
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications.resnet50 import ResNet50
+from tensorflow.keras.applications.inception_resnet_v2 import InceptionResNetV2
+from tensorflow.keras.layers import *
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.initializers import glorot_uniform
+from tensorflow.keras.utils import plot_model
+from IPython.display import display
+from tensorflow.keras import backend as K
+from tensorflow.keras.optimizers import SGD
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping, ModelCheckpoint, LearningRateScheduler
+from jupyterthemes import jtplot
+jtplot.style(theme='monokai', context='notebook', ticks=True, grid=False) 
+# setting the style of the notebook to be monokai theme  
+# this line of code is important to ensure that we are able to see the x and y axes clearly
+# If you don't run this code line, you will notice that the xlabel and ylabel on any plot is black on black and it will be hard to see them. 
+
+%cd C:\Users\Administrator\Desktop\Notebooks\food11
+
+# List all folders under training
+os.listdir('./training')
+
+# List all folders under validation
+os.listdir('./validation')
+
+os.listdir('./evaluation')
+
+# Check the number of images in training, validation and evaluation dataset
+train = []
+valid = []
+test = []
+
+# os.listdir returns the list of files in the folder, in this case image class names
+for i in os.listdir('./training'):
+    train.extend(os.listdir(os.path.join('training',i)))
+    valid.extend(os.listdir(os.path.join('validation',i)))
+    test.extend(os.listdir(os.path.join('evaluation',i)))
+
+
+print('Number of train images: {} \nNumber of validation images: {} \nNumber of test images: {}'.format(len(train),len(valid),len(test)))
+
+train
+
+train_class = os.listdir(os.path.join('training','Seafood'))
+train_class
+
+# Visualize the images in the dataset
+
+fig, axs = plt.subplots(11, 5, figsize = (32,32))
+count = 0
+# for every class in the dataset
+for i in os.listdir('./training'):
+  # get the list of all images that belong to a particular class
+  train_class = os.listdir(os.path.join('training', i))
+  
+  # plot 5 images per class
+  for j in range(5):
+    img = os.path.join('training', i, train_class[j])
+    axs[count][j].title.set_text(i)
+    axs[count][j].imshow(PIL.Image.open(img))  
+  count += 1
+
+fig.tight_layout()
+
+# check the number of images in each class in the training dataset
+
+No_images_per_class = []
+Class_name = []
+for i in os.listdir('./training'):
+  Class_name.append(i)
+  train_class = os.listdir(os.path.join('training',i))
+  print('Number of images in {}={}\n'.format(i,len(train_class)))
+  No_images_per_class.append(len(train_class))
+  
+No_images_per_class
+
+# visualize the number of images in each class in the training dataset
+
+fig = plt.figure(figsize=(10,5))
+plt.bar(Class_name, No_images_per_class, color = sns.color_palette("cubehelix",len(Class_name)))
+fig.tight_layout()
+
+No_images_per_class = []
+Class_name = []
+for i in os.listdir('./validation'):
+  Class_name.append(i)
+  val_class = os.listdir(os.path.join('validation',i))
+  print('Number of images in {}={}\n'.format(i,len(val_class)))
+  No_images_per_class.append(len(val_class))
+  
+No_images_per_class
+
+fig = plt.figure(figsize=(10,5))
+plt.bar(Class_name, No_images_per_class, color = sns.color_palette("cubehelix",len(Class_name)))
+fig.tight_layout()
+
+# create run-time augmentation on training and test dataset
+train_datagen=ImageDataGenerator(rescale=1./255, zoom_range=0.2,horizontal_flip=True,shear_range=0.2)
+# For training datagenerator,  we add normalization, shear angle, zooming range and horizontal flip
+
+# For test datagenerator, we only normalize the data.
+test_datagen = ImageDataGenerator(rescale=1./255)
+
+MINI CHALLENGE #2:
+
+Experiment with other image augmentation strategies to the training data. Pick at least 1 augmentation strategy.
+HINT: https://www.tensorflow.org/api_docs/python/tf/keras/preprocessing/image/ImageDataGenerator
+
+# Create data generator for training, validation and test dataset.
+train_generator = train_datagen.flow_from_directory(
+        'training',
+        target_size=(256, 256),
+        batch_size=32,
+        class_mode='categorical')
+
+validation_generator = test_datagen.flow_from_directory(
+        'validation',
+        target_size=(256, 256),
+        batch_size=32,
+        class_mode='categorical')
+
+test_generator = test_datagen.flow_from_directory(
+        'evaluation',
+        target_size=(256, 256),
+        batch_size=32,
+        class_mode='categorical')
+		
+# load the inception resnetv2 model
+basemodel = InceptionResNetV2(weights="imagenet", include_top=False, input_tensor=Input(shape=(256,256,3)))
+
+# print the model summary
+basemodel.summary()
+
+# Freeze the basemodel weights , so these weights won't change during training
+basemodel.trainable=False
+
+# Add classification head to the model
+
+headmodel=basemodel.output
+headmodel=GlobalAveragePooling2D(name='global_average_pool')(headmodel)
+headmodel=Flatten(name='flatten')(headmodel)
+headmodel=Dense(256,activation='relu',name='dense_1')(headmodel)
+headmodel=Dropout(0.3)(headmodel)
+headmodel=Dense(128,activation='relu',name='dense_2')(headmodel)
+headmodel=Dropout(0.3)(headmodel)
+headmodel=Dense(11,activation='softmax',name='dense_3')(headmodel)
+model = Model(inputs = basemodel.input, outputs = headmodel)
+
+# compile the model
+model.compile(loss='categorical_crossentropy',optimizer=SGD(lr=0.01,momentum=0.9),metrics=['accuracy'])
+
+# using early stopping to exit training if validation loss is not decreasing even after certain epochs (patience)
+earlystopping = EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=20)
+
+# save the best model with lower validation loss
+checkpointer = ModelCheckpoint(filepath="weights.hdf5", verbose=1, save_best_only=True)
+
+history = model.fit(train_generator, steps_per_epoch= train_generator.n // 32, epochs = 1, validation_data= validation_generator, validation_steps= validation_generator.n // 32, callbacks=[checkpointer, earlystopping])
+
+#finetune
+basemodel.trainable=True
+model.summary()	
+
+# using early stopping to exit training if validation loss is not decreasing even after certain epochs (patience)
+earlystopping = EarlyStopping(monitor='val_loss', mode='min', verbose=1, patience=20)
+
+# save the best model with lower validation loss
+checkpointer = ModelCheckpoint(filepath="weights_finen.hdf5", verbose=1, save_best_only=True)
+
+# fine tune the model with very low learning rate
+model.compile(loss='categorical_crossentropy',optimizer=SGD(lr=0.0001,momentum=0.9),metrics=['accuracy'])
+history = model.fit(train_generator, steps_per_epoch= train_generator.n // 32, epochs = 10, validation_data= validation_generator, validation_steps= validation_generator.n // 32, callbacks=[checkpointer, earlystopping])
+
+# Load a pretrained weight
+model.load_weights('weights_fine.hdf5')
+
+# Evaluate the performance of the model
+evaluate = model.evaluate_generator(test_generator, steps = test_generator.n // 32, verbose =1)
+
+print('Accuracy Test : {}'.format(evaluate[1]))
+
+# assigning label names to the corresponding indexes
+labels = {0: 'Bread', 1: 'Dairy product', 2: 'Dessert', 3:'Egg', 4: 'Fried food', 5:'Meat',6:'Noodles-Pasta',7:'Rice', 8:'Seafood',9:'Soup',10: 'Vegetable-Fruit'}
+
+# loading images and their predictions 
+
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
+# import cv2
+
+prediction = []
+original = []
+image = []
+count = 0
+for i in os.listdir('./evaluation'):
+  for item in os.listdir(os.path.join('./evaluation',i)):
+    #code to open the image
+    img= PIL.Image.open(os.path.join('./evaluation',i,item))
+    #resizing the image to (256,256)
+    img = img.resize((256,256))
+    #appending image to the image list
+    image.append(img)
+    #converting image to array
+    img = np.asarray(img, dtype= np.float32)
+    #normalizing the image
+    img = img / 255
+    #reshaping the image in to a 4D array
+    img = img.reshape(-1,256,256,3)
+    #making prediction of the model
+    predict = model.predict(img)
+    #getting the index corresponding to the highest value in the prediction
+    predict = np.argmax(predict)
+    #appending the predicted class to the list
+    prediction.append(labels[predict])
+    #appending original class to the list
+    original.append(i)
+
+# Getting the test accuracy 
+print(classification_report(np.asarray(original),np.array(prediction)))
+
+# visualizing the results
+import random
+fig=plt.figure(figsize = (100,100))
+for i in range(20):
+    j = random.randint(0,len(image))
+    fig.add_subplot(20,1,i+1)
+    plt.xlabel("Prediction -" + prediction[j] +"   Original -" + original[j])
+    plt.imshow(image[j])
+fig.tight_layout()
+plt.show()
+
+# plot confusion matrix
+
+plt.figure(figsize=(20,20))
+cm = confusion_matrix(np.asarray(original), np.asarray(prediction))
+ax = plt.subplot()
+sns.heatmap(cm, annot = True, ax = ax)
+
+ax.set_xlabel('Predicted')
+ax.set_ylabel('Original')
+ax.set_title('Confusion_matrix')
